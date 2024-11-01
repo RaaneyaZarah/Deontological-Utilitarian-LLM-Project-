@@ -1,0 +1,352 @@
+!pip install transformers accelerate
+
+!pip install trl
+
+import transformers
+import trl
+
+print("Transformers and TRL installed successfully!")
+
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+model_name = "llama3.2"
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForCausalLM.from_pretrained(model_name)
+
+inputs = tokenizer("Hello, how are you?", return_tensors="pt")
+outputs = model.generate(**inputs,
+                         max_length=150,
+                         do_sample=True,
+                         temperature=0.7,
+                         top_k=50,
+                         top_p=0.9)
+
+
+print(tokenizer.decode(outputs[0], skip_special_tokens=True))
+
+
+  # Install necessary packages
+!pip install transformers datasets trl pandas
+
+!pip install transformers accelerate
+
+import transformers
+import trl
+import pandas as pd
+import torch
+from transformers import AutoTokenizer, AutoModelForCausalLM, Trainer, TrainingArguments
+from datasets import Dataset
+
+# Define deontological and utilitarian scenarios
+deontological_data = {
+    "prompt": [
+        "A self-driving car must choose between hitting one pedestrian or sacrificing its passengers.",
+        "A doctor must decide whether to inform a patient about a terminal illness, knowing it will cause distress.",
+        "You find a wallet with money inside. Do you keep it or return it to the owner?",
+        "In a fire, you can save your family or a stranger. What do you choose?",
+        "A company discovers that a product is harmful but chooses to hide this information."
+    ],
+    "response": [
+        "The car should not act to harm any individual, adhering to the moral rule that prioritizes the sanctity of life.",
+        "The doctor has a duty to inform the patient, respecting their right to know the truth.",
+        "You must return the wallet, as it is the right thing to do according to moral duties.",
+        "You must save your family, as it is your duty to protect those closest to you.",
+        "The company has a moral obligation to disclose the information to protect consumers."
+    ]
+}
+
+utilitarian_data = {
+    "prompt":
+        "You are a Utilitarian philosopher with many student followers. You will create scenarios for discussion that your students will debate against deontological pupils. For example, some discussion scenarios could be:\
+        A self-driving car must choose between hitting one pedestrian or sacrificing its passengers.\
+        A doctor must decide whether to inform a patient about a terminal illness, knowing it will cause distress.\
+        You find a wallet with money inside. Do you keep it or return it to the owner?\
+        In a fire, you can save your family or a stranger. What do you choose?\
+        A company discovers that a product is harmful but chooses to hide this information."
+    ,
+    "response":
+
+        "You want your students to consider factors such as: The car should prioritize minimizing overall harm by choosing the option that saves the most lives.\
+        The doctor should consider the overall happiness of the patient and their family when making the decision.\
+        Returning the wallet is preferable as it maximizes happiness for the owner.\
+        You should save the person who has the most to lose, maximizing the overall good.\
+        The company should disclose the information to minimize harm to consumers, maximizing overall welfare."
+
+}
+
+# Create DataFrames
+#deontological_df = pd.DataFrame(deontological_data)
+#utilitarian_df = pd.DataFrame(utilitarian_data)
+
+# Save to CSV files
+#deontological_df.to_csv('deontological_scenarios.csv', index=False)
+#utilitarian_df.to_csv('utilitarian_scenarios.csv', index=False)
+
+# Load datasets
+#deontological_df = pd.read_csv('deontological_scenarios.csv')
+#utilitarian_df = pd.read_csv('utilitarian_scenarios.csv')
+
+# Convert DataFrames to Hugging Face Dataset format
+deontological_dataset = Dataset.from_pandas(deontological_df)
+utilitarian_dataset = Dataset.from_pandas(utilitarian_df)
+
+# Shuffle and split datasets into training and validation sets
+deontological_dataset = deontological_dataset.train_test_split(test_size=0.2)
+utilitarian_dataset = utilitarian_dataset.train_test_split(test_size=0.2)
+
+# Load the tokenizer and model
+model_name = "llama3.2"  # Changed to a larger model
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForCausalLM.from_pretrained(model_name)
+
+# Set padding token
+tokenizer.pad_token = tokenizer.eos_token
+tokenizer.pad_token_id = tokenizer.eos_token_id
+
+def tokenize_function(examples):
+    input_ids = tokenizer(examples["prompt"], padding="max_length", truncation=True, max_length=256, return_tensors="pt")
+    labels = input_ids["input_ids"].clone()
+    labels[labels == tokenizer.pad_token_id] = -100  # Ignore padding in the loss
+
+    return {
+        "input_ids": input_ids["input_ids"],
+        "attention_mask": input_ids["attention_mask"],
+        "labels": labels,
+    }
+
+# Tokenize the datasets
+deontological_tokenized = deontological_dataset.map(tokenize_function, batched=True)
+utilitarian_tokenized = utilitarian_dataset.map(tokenize_function, batched=True)
+
+# Set format for PyTorch
+deontological_tokenized.set_format(type='torch', columns=['input_ids', 'attention_mask', 'labels'])
+utilitarian_tokenized.set_format(type='torch', columns=['input_ids', 'attention_mask', 'labels'])
+
+# Define training arguments
+training_args = TrainingArguments(
+    output_dir='./results',
+    evaluation_strategy="epoch",
+    learning_rate=2e-5,
+    per_device_train_batch_size=2,  # Adjust this if you encounter memory errors
+    per_device_eval_batch_size=2,
+    num_train_epochs=3,
+    weight_decay=0.01,
+    logging_dir='./logs',
+)
+
+# Initialize Trainer for both models
+deontological_trainer = Trainer(
+    model=model,  # Use the same model for both
+    args=training_args,
+    train_dataset=deontological_tokenized['train'],
+    eval_dataset=deontological_tokenized['test'],
+)
+
+utilitarian_trainer = Trainer(
+    model=model,  # Use the same model for both
+    args=training_args,
+    train_dataset=utilitarian_tokenized['train'],
+    eval_dataset=utilitarian_tokenized['test'],
+)
+
+# Train the models
+deontological_trainer.train()
+utilitarian_trainer.train()
+
+# Save the model and tokenizer
+model.save_pretrained('./ethical_decision_model')
+tokenizer.save_pretrained('./ethical_decision_tokenizer')
+
+def generate_scenario(model, tokenizer, prompt, num_return_sequences=3, temperature=0.7, top_k=50, top_p=0.95):
+    model.eval()  # Ensure the model is in evaluation mode
+    inputs = tokenizer.encode(prompt, return_tensors='pt').to(model.device)  # Move inputs to model device
+    attention_mask = (inputs != tokenizer.pad_token_id).to(model.device)  # Create attention mask
+
+    with torch.no_grad():
+        outputs = model.generate(
+            inputs,
+            attention_mask=attention_mask,
+            max_length=150,  # Increased length for better responses
+            num_return_sequences=num_return_sequences,
+            temperature=temperature,
+            top_k=top_k,
+            top_p=top_p,
+            do_sample=True  # Enable sampling
+        )
+
+    return [tokenizer.decode(output, skip_special_tokens=True) for output in outputs]
+
+torch.cuda.empty_cache()
+
+# Example prompt
+prompt_example = (
+    "A self-driving car must choose between hitting one pedestrian or sacrificing its passengers."
+)
+
+# Generate scenarios
+deontological_scenarios = generate_scenario(model, tokenizer, prompt_example)
+utilitarian_scenarios = generate_scenario(model, tokenizer, prompt_example)
+
+# Print scenarios
+print("Deontological Scenarios:")
+for scenario in deontological_scenarios:
+    print(scenario)
+
+print("\nUtilitarian Scenarios:")
+for scenario in utilitarian_scenarios:
+    print(scenario)
+import torch
+from trl import AutoModelForCausalLMWithValueHead
+
+class ActivationSteeredModelWithValueHead(AutoModelForCausalLMWithValueHead):
+    def __init__(self, pretrained_model_name_or_path, activation_steering_vector):
+        super().__init__.from_pretrained(pretrained_model_name_or_path)
+        self.activation_steering_vector = activation_steering_vector
+
+    def forward(self, input_ids=None, attention_mask=None, **kwargs):
+        # Get transformer outputs with hidden states
+        transformer_outputs = self.base_model.transformer(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            output_hidden_states=True,
+            **kwargs
+        )
+        hidden_states = transformer_outputs.hidden_states  # Tuple of hidden states
+
+        # Choose the layer to apply activation steering
+        layer_to_steer = -1  # Last layer (you can choose any layer)
+        steered_hidden_state = hidden_states[layer_to_steer] + self.activation_steering_vector
+
+        # Compute logits using the steered hidden state
+        logits = self.base_model.lm_head(steered_hidden_state)
+
+        # Compute value head outputs for PPO
+        values = self.v_head(steered_hidden_state).squeeze(-1)
+
+        return {'logits': logits, 'values': values}
+
+
+class ActivationSteeredModelWithValueHead(AutoModelForCausalLMWithValueHead):
+    def __init__(self, pretrained_model_name_or_path, activation_steering_vector):
+        # Load the pretrained model first
+        pretrained_model = AutoModelForCausalLMWithValueHead.from_pretrained(pretrained_model_name_or_path)
+        # Then correctly initialize the super class
+        super(ActivationSteeredModelWithValueHead, self).__init__(pretrained_model)
+        self.activation_steering_vector = activation_steering_vector
+
+    def forward(self, input_ids=None, attention_mask=None, **kwargs):
+        # ... (rest of the forward method remains the same)
+
+        # Define your activation steering vector (adjust as needed)
+        activation_steering_vector = torch.rand(model.config.n_embd)
+
+        # Instantiate the custom model
+        model = ActivationSteeredModelWithValueHead(model_name, activation_steering_vector)
+from transformers import GenerationConfig, TrainingArguments
+from trl import PPOTrainer, PPOConfig
+
+# Configure the PPO trainer (adjust parameters as necessary)
+ppo_config = PPOConfig(
+    model_name=model_name,
+    learning_rate=5e-6,
+    batch_size=4,
+    mini_batch_size=1,
+    ppo_epochs=4,
+    # The 'max_length' parameter is likely not supported in your version of TRL's PPOConfig.
+    # Remove it or consult the TRL documentation for the correct parameter name.
+    # max_length=150,
+)
+
+# Update training arguments if needed
+# You can specify 'max_length' in the TrainingArguments instead if needed.
+# Instead of generation_max_length, use the correct parameter name:
+# generation_max_length is deprecated, use max_length instead
+training_args = TrainingArguments(
+    output_dir="./ppo_results",
+    per_device_train_batch_size=4,
+    gradient_accumulation_steps=1,
+    num_train_epochs=1,
+    logging_steps=1,
+    fp16=True,
+    # max_length=150,  # Specify max_length here for generation - Remove this line
+)
+
+# Create GenerationConfig and set max_length
+generation_config = GenerationConfig(
+    max_length=150, # Set your desired max_length here
+)
+
+# Create the PPO trainer with the custom model
+ppo_trainer = PPOTrainer(
+    model=model,
+    config=ppo_config,
+    tokenizer=None,  # Replace with your tokenizer if needed
+    dataset=None,    # Replace with your dataset if needed
+    data_collator=None,  # Replace with your data collator if needed
+    training_args=training_args,
+    reward_function=reward_function,
+    generation_config=generation_config, # Pass the generation_config here
+)# Step 1: Install required libraries
+# !pip install transformers datasets trl
+
+# Step 2: Import necessary libraries
+import pandas as pd
+from trl import PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead
+from trl import PPOTrainer, PPOConfig
+from datasets import Dataset
+
+
+
+
+# Step 3: Load the utilitarianism dataset (assumes it's stored locally or a valid URL)
+utilitarian_data_path = "util_train.csv"
+utilitarian_df = pd.read_csv("util_train.csv")
+
+# Convert to Hugging Face Dataset
+dataset = Dataset.from_pandas(utilitarian_df)
+
+# Step 4: Load GPT-4 model (or any relevant pre-trained model)
+model_name = "gpt2"  # You can switch to GPT-4 or a different model
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+model = AutoModelForCausalLM.from_pretrained(model_name)
+
+
+
+# Step 5: Tokenize dataset
+def tokenize_function(examples):
+    return tokenizer(examples['text'], padding="max_length", truncation=True)
+
+tokenized_dataset = dataset.map(tokenize_function, batched=True)
+
+# Step 6: Create a custom reward function for utilitarianism
+def reward_function(model_output, ground_truth):
+    """
+    Custom reward function to score the model output for utilitarian principles.
+    Reward higher if the answer maximizes happiness for the greatest number.
+    """
+    # This is an example placeholder. You'd design this based on your dataset and utilitarian principles.
+    if "maximize well-being" in model_output:
+        return 1.0  # High reward for utilitarian response
+    else:
+        return 0.0  # Low reward for non-utilitarian response
+
+# Step 7: Set up PPO Trainer with TRL library
+ppo_config = PPOConfig(batch_size=16, forward_batch_size=4, ppo_epochs=4)
+
+# Step 8: Initialize PPO Trainer
+ppo_trainer = PPOTrainer(model=model, tokenizer=tokenizer, config=ppo_config)
+
+# Step 9: Fine-tune the model using PPO and the custom reward function
+for batch in tokenized_dataset:
+    query_tensors = tokenizer(batch['input_ids'], return_tensors="pt")
+    response_tensors = model.generate(**query_tensors)
+
+    rewards = [reward_function(response, batch['ground_truth']) for response in response_tensors]
+
+    # Use PPO Trainer to optimize the model based on the rewards
+    ppo_trainer.step(query_tensors, response_tensors, rewards)
+
+# Step 10: Save the steered utilitarian model
+model.save_pretrained("steered-utilitarian-model")
+tokenizer.save_pretrained("steered-utilitarian-model")
