@@ -1,0 +1,121 @@
+# Step 1: Install required libraries
+# !pip install transformers datasets trl
+
+# Step 2: Import necessary libraries
+import pandas as pd
+!pip install trl
+from trl import PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead
+from transformers import AutoTokenizer
+from datasets import Dataset
+import torch
+
+
+# Step 3: Load the utilitarianism dataset (assumes it's stored locally or a valid URL)
+utilitarian_data_path = "util_train-1.csv"
+utilitarian_df = pd.read_csv(utilitarian_data_path)
+
+# Convert to Hugging Face Dataset
+dataset = Dataset.from_pandas(utilitarian_df)
+
+# Step 4: Load GPT-2 model (or any relevant pre-trained model)
+model_name = "gpt2"  # You can switch to GPT-4 or a different model
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# Use AutoModelForCausalLMWithValueHead instead of AutoModelForCausalLM
+model = AutoModelForCausalLMWithValueHead.from_pretrained(model_name)
+model.to(device)
+
+# Step 5: Tokenize dataset
+def tokenize_function(examples):
+    return tokenizer(examples['text'], padding="max_length", truncation=True)
+
+tokenized_dataset = dataset.map(tokenize_function, batched=True)
+
+# Step 6: Create a custom reward function for utilitarianism
+def reward_function(model_output, ground_truth):
+    """
+    Custom reward function to score the model output for utilitarian principles.
+    Reward higher if the answer maximizes happiness for the greatest number.
+    """
+    # This is an example placeholder. You'd design this based on your dataset and utilitarian principles.
+    if "maximize well-being" in model_output:
+        return 1.0  # High reward for utilitarian response
+    else:
+        return 0.0  # Low reward for non-utilitarian response
+
+# Step 7: Set up PPO Trainer with TRL library
+ppo_config = PPOConfig(batch_size=16, forward_batch_size=4, ppo_epochs=4)
+
+# Step 8: Initialize PPO Trainer
+ppo_trainer = PPOTrainer(model=model, tokenizer=tokenizer, config=ppo_config)
+
+# Set batch size according to PPO config
+batch_size = ppo_config.batch_size
+
+# Initialize accumulators for queries, responses, and rewards
+accumulated_queries = []
+accumulated_responses = []
+accumulated_rewards = []
+
+# # Step 9: Fine-tune the model using PPO and the custom reward function
+# for i, batch in enumerate(tokenized_dataset):
+#     # Use the raw text from your dataset (not the tokenized input IDs)
+#     query_tensors = tokenizer(batch['text'], return_tensors="pt", padding=True, truncation=True)
+
+#     # Move input tensors to the same device as the model
+#     query_tensors = {key: value.to(device) for key, value in query_tensors.items()}
+
+#     # Set max_new_tokens to control only the generated output length
+#     response_tensors = model.generate(**query_tensors, max_new_tokens=50)  # Adjust max_new_tokens as needed
+
+#     # Decode the generated tokens to text for further processing
+#     generated_texts = tokenizer.batch_decode(response_tensors, skip_special_tokens=True)
+
+#     # Compute rewards based on the custom reward function
+#     rewards = [reward_function(response, batch['ground_truth']) for response in generated_texts]
+
+#     # Append queries, responses, and rewards to the accumulators
+#     accumulated_queries.append(query_tensors['input_ids'])
+#     accumulated_responses.append(response_tensors)
+#     accumulated_rewards.append(torch.tensor(rewards).to(device))
+
+#     # Once we have accumulated a full batch, pass it to PPO trainer
+#     if (i + 1) % batch_size == 0:
+#         # Padding for queries and responses to match sizes
+#         max_query_len = max([q.size(1) for q in accumulated_queries])
+#         max_response_len = max([r.size(1) for r in accumulated_responses])
+
+#         # Apply padding
+#         accumulated_queries = [torch.nn.functional.pad(q, (0, max_query_len - q.size(1))) for q in accumulated_queries]
+#         accumulated_responses = [torch.nn.functional.pad(r, (0, max_response_len - r.size(1))) for r in accumulated_responses]
+
+#         # Ensure we pass lists of tensors
+#         ppo_trainer.step(accumulated_queries, accumulated_responses, accumulated_rewards)
+
+#         # Clear the accumulators for the next batch
+#         accumulated_queries = []
+#         accumulated_responses = []
+#         accumulated_rewards = []
+
+# # After the loop, check if there are remaining examples not yet processed
+# if accumulated_queries:
+#     max_query_len = max([q.size(1) for q in accumulated_queries])
+#     max_response_len = max([r.size(1) for r in accumulated_responses])
+
+#     # Apply padding for remaining examples
+#     accumulated_queries = [torch.nn.functional.pad(q, (0, max_query_len - q.size(1))) for q in accumulated_queries]
+#     accumulated_responses = [torch.nn.functional.pad(r, (0, max_response_len - r.size(1))) for r in accumulated_responses]
+
+#     ppo_trainer.step(accumulated_queries, accumulated_responses, accumulated_rewards)
+
+
+
+# Step 10: Save the steered utilitarian model
+model.save_pretrained("steered-utilitarian-model")
+tokenizer.save_pretrained("steered-utilitarian-model")
+
+
+
